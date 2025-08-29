@@ -327,7 +327,7 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
     const pagamentoData = {
       amount: Math.round(amount * 100), // em centavos
       currency: "BRL",
-      redirectUrl: "https://seusite.com/sucesso", // URL de redirecionamento
+      redirectUrl: "https://bluecheat-front.vercel.app/sucesso", // URL de redirecionamento
       metadata: {
         discord_id: discord_id,
         timestamp: new Date().toISOString()
