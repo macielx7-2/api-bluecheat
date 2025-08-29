@@ -409,6 +409,47 @@ app.post("/pagamentos/webhook", async (req, res) => {
 });
 
 
+// Rota para verificar status do pagamento pelo discord_id
+app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
+  const { discord_id } = req.params;
+
+  try {
+    // Busca o pagamento mais recente do usuário
+    const result = await pool.query(
+      `SELECT payment_id, status, amount, reference, redirect_url, created_at
+       FROM pagamentos
+       WHERE discord_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [discord_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ sucesso: false, mensagem: "Nenhum pagamento encontrado para este usuário" });
+    }
+
+    const pagamento = result.rows[0];
+
+    res.json({
+      sucesso: true,
+      pagamento: {
+        payment_id: pagamento.payment_id,
+        status: pagamento.status, // "pendente" ou "concluido"
+        amount: pagamento.amount,
+        reference: pagamento.reference,
+        redirect_url: pagamento.redirect_url,
+        created_at: pagamento.created_at
+      }
+    });
+
+  } catch (err) {
+    console.error("Erro ao verificar status do pagamento:", err);
+    res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
+  }
+});
+
+
+
 // Inicialização do servidor
 app.listen(3001, () => {
   console.log("API rodando na porta 3001");
