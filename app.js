@@ -389,16 +389,22 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
 // Rota webhook - LivePix chama automaticamente
 app.post("/pagamentos/webhook", async (req, res) => {
   try {
-    const { id, reference, status } = req.body.data; // dados que o LivePix envia
+    const { event, resource } = req.body; // desestrutura do body
+    const { id: paymentId, reference, type } = resource;
 
     console.log("Webhook recebido:", req.body);
+
+    if (type !== "payment") {
+      console.log("Evento ignorado:", type);
+      return res.status(200).json({ recebido: true });
+    }
 
     // Atualiza o status do pagamento no banco
     await pool.query(
       `UPDATE pagamentos
        SET status = $1
        WHERE payment_id = $2`,
-      [status, id]
+      ["concluido", paymentId]
     );
 
     res.status(200).json({ recebido: true });
@@ -407,6 +413,7 @@ app.post("/pagamentos/webhook", async (req, res) => {
     res.status(500).json({ sucesso: false });
   }
 });
+
 
 
 // Rota para verificar status do pagamento pelo discord_id
