@@ -2,8 +2,15 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const { Pool } = require('pg');
 const path = require('path'); // Import necessário para path.join
+const cors = require('cors');
+const axios = require('axios');
+require('dotenv').config();
 
-const API_TOKEN = "BLUECHEATMACIEL2025!@#"; // Token seguro para download
+
+
+const API_TOKEN = process.env.TOKENAPI; // Token seguro para download
+const LIVEPIX_CLIENT_ID = process.env.LIVEPIX_CLIENT_ID;
+const LIVEPIX_CLIENT_SECRET = process.env.LIVEPIX_CLIENT_SECRET;
 
 // Middleware para autenticar token
 function autenticarToken(req, res, next) {
@@ -18,8 +25,10 @@ function autenticarToken(req, res, next) {
   next(); // token válido, continua
 }
 
-const app = express();
+const app = express(); // cria o app primeiro
+app.use(cors());       // só depois usa
 app.use(bodyParser.json());
+
 
 // Conexão com PostgreSQL
 const pool = new Pool({
@@ -29,6 +38,108 @@ const pool = new Pool({
   password: 'jOYwTBGKjpdzgIKYmNfUsURhLrIUuRVD',
   port: 39715,
 });
+
+// Função auxiliar para obter o access_token
+async function getLivePixToken() {
+  try {
+    const params = new URLSearchParams();
+    params.append("grant_type", "client_credentials");
+    params.append("client_id", LIVEPIX_CLIENT_ID);
+    params.append("client_secret", LIVEPIX_CLIENT_SECRET);
+    params.append("scope", "payments:write"); // Scope correto conforme documentação
+
+    const response = await axios.post("https://oauth.livepix.gg/oauth2/token", params, {
+      headers: { 
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json"
+      }
+    });
+
+    console.log("Token obtido com sucesso. Scope:", response.data.scope);
+    return response.data.access_token;
+  } catch (error) {
+    console.error("Erro ao obter token LivePix:", {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    throw error;
+  }
+}
+
+
+
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
+
+// Rota para receber o code do Discord e trocar pelo token
+app.post('/auth/discord', async (req, res) => {
+  const { code } = req.body;
+
+  if (!code) return res.status(400).json({ error: 'Code não fornecido' });
+
+  try {
+    // Troca code pelo access_token
+    const params = new URLSearchParams();
+    params.append('client_id', CLIENT_ID);
+    params.append('client_secret', CLIENT_SECRET);
+    params.append('grant_type', 'authorization_code');
+    params.append('code', code);
+    params.append('redirect_uri', REDIRECT_URI);
+
+    const tokenResponse = await axios.post(
+      'https://discord.com/api/oauth2/token',
+      params.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    const { access_token } = tokenResponse.data;
+
+    // Buscar dados do usuário no Discord
+    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${access_token}` }
+    });
+
+    const discordUser = userResponse.data;
+
+    // Salvar ou atualizar no banco
+    const query = `
+      INSERT INTO usuarios (discord_id, discord_username, discord_avatar)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (discord_id)
+      DO UPDATE SET discord_username = EXCLUDED.discord_username,
+                    discord_avatar = EXCLUDED.discord_avatar
+      RETURNING *;
+    `;
+
+    const result = await pool.query(query, [
+      discordUser.id,
+      discordUser.username,
+      `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+    ]);
+
+    const usuario = result.rows[0];
+
+    return res.json({
+      usuario,
+      token: access_token
+    });
+
+  } catch (err) {
+    console.error("Erro ao trocar code pelo token:", err.response?.data || err.message);
+    return res.status(500).json({ error: err.response?.data || err.message });
+  }
+
+});
+
+
+
+// Rota pública GET
+app.get('/', (req, res) => {
+  res.send("API BlueCheat funcionando");
+});
+
 
 // Rota de download protegida
 app.get('/download', autenticarToken, (req, res) => {
@@ -42,8 +153,8 @@ app.get('/download', autenticarToken, (req, res) => {
 });
 
 // Rota de login e verificação de licença
-app.post('/login', async (req, res) => {
-  const { email, senha } = req.body;
+app.post('/login', autenticarToken, async (req, res) => {
+  const { email, senha, hwid } = req.body;
 
   try {
     // Busca usuário
@@ -71,17 +182,232 @@ app.post('/login', async (req, res) => {
     const licenca = licencaResult.rows[0];
     const hoje = new Date();
 
-    if (hoje <= new Date(licenca.data_fim)) {
-      return res.json({ autorizado: true, mensagem: "Licença ativa até " + licenca.data_fim });
-    } else {
+    if (hoje > new Date(licenca.data_fim)) {
       return res.json({ autorizado: false, mensagem: "Licença expirada em " + licenca.data_fim });
     }
+
+    // Controle de HWID
+    if (!licenca.hwid) {
+      // primeira ativação: grava o hwid enviado
+      await pool.query(
+        'UPDATE licencas SET hwid = $1 WHERE id = $2',
+        [hwid, licenca.id]
+      );
+    } else if (licenca.hwid !== hwid) {
+      // HWID diferente → nega acesso
+      return res.json({ autorizado: false, mensagem: "Licença já está vinculada a outro computador" });
+    }
+
+    // Tudo ok
+    return res.json({ autorizado: true, mensagem: "Licença ativa até " + licenca.data_fim });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ autorizado: false, mensagem: "Erro no servidor" });
   }
 });
+
+
+app.post('/usuarios/updatePreco', autenticarToken, async (req, res) => {
+  const { discord_id, preco_escolhido } = req.body;
+  console.log("Recebido updatePreco:", req.body);
+
+  if (!discord_id || preco_escolhido === undefined) {
+    return res.status(400).json({ sucesso: false, mensagem: "Dados incompletos" });
+  }
+
+  try {
+    console.log(`Tentando atualizar preco_escolhido = ${preco_escolhido} para discord_id = ${discord_id}`);
+
+    const result = await pool.query(
+      `UPDATE usuarios
+       SET preco_escolhido = $1
+       WHERE discord_id = $2
+       RETURNING *;`,
+      [preco_escolhido, discord_id]
+    );
+
+    console.log("Resultado do UPDATE:", result.rows);
+
+    if (result.rows.length === 0) {
+      console.log("Usuário não encontrado, criando novo:", discord_id, preco_escolhido);
+
+      const insertResult = await pool.query(
+        `INSERT INTO usuarios (discord_id, preco_escolhido) VALUES ($1, $2) RETURNING *`,
+        [discord_id, preco_escolhido]
+      );
+
+      console.log("Resultado do INSERT:", insertResult.rows);
+      return res.json({ sucesso: true, usuario: insertResult.rows[0] });
+    }
+
+    res.json({ sucesso: true, usuario: result.rows[0] });
+  } catch (err) {
+    console.error("Erro no updatePreco:", err);
+    res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
+  }
+});
+
+
+
+
+
+// Adicione esta rota no seu app.js (API)
+app.get('/usuarios/preco/:discord_id', autenticarToken, async (req, res) => {
+  const { discord_id } = req.params;
+
+  try {
+    const result = await pool.query(
+      'SELECT preco_escolhido FROM usuarios WHERE discord_id = $1',
+      [discord_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ mensagem: "Usuário não encontrado" });
+    }
+
+    res.json({ preco_escolhido: result.rows[0].preco_escolhido });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ mensagem: "Erro no servidor" });
+  }
+});
+
+app.post('/usuarios/updateInfo', autenticarToken, async (req, res) => {
+  const { discord_id, email, nome, sobrenome, cpf, numero_residencia, cep, complemento, senha, checkbox1, checkbox2 } = req.body;
+
+  if (!discord_id || !email || !nome || !sobrenome || !cpf || !numero_residencia || !cep || !complemento || !senha) {
+    return res.status(400).json({ sucesso: false, mensagem: "Dados incompletos" });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE usuarios
+       SET email = $1,
+           nome = $2,
+           sobrenome = $3,
+           cpf = $4,
+           numero_residencia = $5,
+           cep = $6,
+           complemento = $7,
+           senha = $8,               -- adiciona aqui
+           termo1_preenchido = $9,
+           termo2_preenchido = $10
+       WHERE discord_id = $11
+       RETURNING *;`,
+      [email, nome, sobrenome, cpf, numero_residencia, cep, complemento, senha, checkbox1, checkbox2, discord_id]
+    );
+
+    if (result.rows.length === 0) {
+      console.error("usuario não encontrado")
+      return res.status(404).json({ sucesso: false, mensagem: "Usuário não encontrado" });
+    }
+
+    res.json({ sucesso: true, usuario: result.rows[0] });
+  } catch (err) {
+    console.error("Erro ao atualizar informações do usuário:", err);
+    res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
+  }
+});
+
+
+
+app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
+  const { discord_id, amount } = req.body;
+
+  if (!discord_id || !amount) {
+    return res.status(400).json({ sucesso: false, mensagem: "Dados incompletos" });
+  }
+
+  try {
+    // 1. Obter token
+    const token = await getLivePixToken();
+
+    // 2. Criar pagamento no LivePix
+    const pagamentoData = {
+      amount: Math.round(amount * 100), // em centavos
+      currency: "BRL",
+      redirectUrl: "https://seusite.com/sucesso", // URL de redirecionamento
+      metadata: {
+        discord_id: discord_id,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    console.log("Criando pagamento com dados:", pagamentoData);
+
+    const pagamentoResponse = await axios.post(
+      "https://api.livepix.gg/v2/payments", 
+      pagamentoData,
+      {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    console.log("Resposta da LivePix:", pagamentoResponse.data);
+
+    const { reference, redirectUrl, id: paymentId } = pagamentoResponse.data.data;
+
+    // 3. Salvar no banco
+    const result = await pool.query(
+      `INSERT INTO pagamentos (discord_id, amount, currency, reference, payment_id, redirect_url, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [discord_id, amount, "BRL", reference, paymentId, redirectUrl, "pendente"]
+    );
+
+    // 4. Retornar para o front
+    return res.json({ 
+      sucesso: true, 
+      pagamento: result.rows[0],
+      redirect_url: redirectUrl
+    });
+
+  } catch (err) {
+    console.error("Erro completo ao criar pagamento:", {
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+      config: {
+        url: err.config?.url,
+        data: err.config?.data
+      }
+    });
+    
+    return res.status(500).json({ 
+      sucesso: false, 
+      mensagem: "Erro ao criar pagamento",
+      detalhes: err.response?.data || err.message
+    });
+  }
+});
+
+
+// Rota webhook - LivePix chama automaticamente
+app.post("/pagamentos/webhook", async (req, res) => {
+  try {
+    const { id, reference, status } = req.body.data; // dados que o LivePix envia
+
+    console.log("Webhook recebido:", req.body);
+
+    // Atualiza o status do pagamento no banco
+    await pool.query(
+      `UPDATE pagamentos
+       SET status = $1
+       WHERE payment_id = $2`,
+      [status, id]
+    );
+
+    res.status(200).json({ recebido: true });
+  } catch (err) {
+    console.error("Erro no webhook:", err);
+    res.status(500).json({ sucesso: false });
+  }
+});
+
 
 // Inicialização do servidor
 app.listen(3001, () => {
