@@ -493,6 +493,90 @@ setInterval(async () => {
   }
 }, 30000);
 
+// Função para criar ou atualizar licença
+async function criarOuAtualizarLicenca(discord_id, amount) {
+  try {
+    // Primeiro, buscar o usuário pelo discord_id
+    const usuarioResult = await pool.query(
+      `SELECT id, preco_escolhido FROM usuarios WHERE discord_id = $1`,
+      [discord_id]
+    );
+
+    if (usuarioResult.rows.length === 0) {
+      console.log(`❌ Usuário com discord_id ${discord_id} não encontrado`);
+      return;
+    }
+
+    const usuario = usuarioResult.rows[0];
+    const usuario_id = usuario.id;
+    
+    // Determinar o plano com base no preço_escolhido OU no amount do pagamento
+    const preco = usuario.preco_escolhido || amount;
+    const { plano, dataFim } = determinarPlanoEDataFim(preco);
+
+    console.log(`📋 Criando/atualizando licença para usuário ${usuario_id}: ${plano}`);
+
+    // Verificar se já existe uma licença ativa para este usuário
+    const licencaExistente = await pool.query(
+      `SELECT id FROM licencas WHERE usuario_id = $1 AND data_fim > NOW()`,
+      [usuario_id]
+    );
+
+    if (licencaExistente.rows.length > 0) {
+      // Se já existe licença ativa, atualizar a data_fim
+      await pool.query(
+        `UPDATE licencas 
+         SET data_fim = $1, plano = $2, data_inicio = NOW()
+         WHERE usuario_id = $3 AND data_fim > NOW()`,
+        [dataFim, plano, usuario_id]
+      );
+      console.log(`✅ Licença atualizada para usuário ${usuario_id}`);
+    } else {
+      // Se não existe, criar nova licença
+      await pool.query(
+        `INSERT INTO licencas (usuario_id, plano, data_inicio, data_fim)
+         VALUES ($1, $2, NOW(), $3)`,
+        [usuario_id, plano, dataFim]
+      );
+      console.log(`✅ Nova licença criada para usuário ${usuario_id}`);
+    }
+
+  } catch (err) {
+    console.error(`❌ Erro ao criar/atualizar licença para ${discord_id}:`, err.message);
+  }
+}
+
+// Função auxiliar para determinar plano e data fim
+function determinarPlanoEDataFim(preco) {
+  const hoje = new Date();
+  let plano, dataFim;
+
+  switch (preco) {
+    case 1: // Semanal
+      plano = "semanal";
+      dataFim = new Date(hoje.setDate(hoje.getDate() + 7));
+      break;
+    case 40: // Mensal
+      plano = "mensal";
+      dataFim = new Date(hoje.setMonth(hoje.getMonth() + 1));
+      break;
+    case 80: // Trimestral
+      plano = "trimestral";
+      dataFim = new Date(hoje.setMonth(hoje.getMonth() + 3));
+      break;
+    case 200: // Anual
+      plano = "anual";
+      dataFim = new Date(hoje.setFullYear(hoje.getFullYear() + 1));
+      break;
+    default:
+      // Valor padrão se não reconhecer o preço
+      plano = "mensal";
+      dataFim = new Date(hoje.setMonth(hoje.getMonth() + 1));
+  }
+
+  return { plano, dataFim };
+}
+
 
 
 // Inicialização do servidor
