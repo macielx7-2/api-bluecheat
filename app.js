@@ -424,7 +424,13 @@ app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) =
 
   try {
     const result = await pool.query(
-      `SELECT * FROM pagamentos
+      `SELECT *, 
+              CASE 
+                WHEN status = 'concluido' AND pago_em IS NOT NULL 
+                THEN EXTRACT(EPOCH FROM (NOW() - pago_em)) 
+                ELSE NULL 
+              END as segundos_desde_pagamento
+       FROM pagamentos
        WHERE discord_id = $1
        ORDER BY criado_em DESC
        LIMIT 1`,
@@ -437,7 +443,6 @@ app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) =
 
     const pagamento = result.rows[0];
     
-    // Apenas retorna o status do banco, SEM consultar a API
     res.json({ 
       sucesso: true, 
       pagamento,
