@@ -504,7 +504,7 @@ setInterval(async () => {
       if (consulta.data && consulta.data.length > 0) {
         console.log(`Pagamento confirmado: ${pagamento.reference}`);
         await pool.query(
-          `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
+          `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1`,
           [pagamento.payment_id]
         );
         pagamento.status = "concluido";
