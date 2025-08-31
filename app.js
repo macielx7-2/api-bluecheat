@@ -497,23 +497,39 @@ setInterval(async () => {
       `SELECT * FROM pagamentos WHERE status = 'pendente'`
     );
 
-    for (const pagamento of pendentes.rows) {
-      const consulta = await consultarPagamento(pagamento.reference);
+    console.log(`Encontrados ${pendentes.rows.length} pagamentos pendentes`);
 
-      // No seu job automático e rotas de status:
-      if (consulta.data && consulta.data.length > 0) {
-        console.log(`Pagamento confirmado: ${pagamento.reference}`);
-        await pool.query(
-          `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1`,
-          [pagamento.payment_id]
-        );
-        pagamento.status = "concluido";
+    for (const pagamento of pendentes.rows) {
+      try {
+        console.log(`Verificando pagamento: ${pagamento.reference} (ID: ${pagamento.payment_id})`);
+        
+        const consulta = await consultarPagamento(pagamento.reference);
+
+        if (consulta.data && consulta.data.length > 0) {
+          console.log(`✅ Pagamento confirmado na LivePix: ${pagamento.reference}`);
+          
+          // CORREÇÃO AQUI: Use payment_id no WHERE e passe payment_id
+          const result = await pool.query(
+            `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1 RETURNING *`,
+            [pagamento.payment_id]
+          );
+          
+          if (result.rowCount > 0) {
+            console.log(`✅ Pagamento ${pagamento.payment_id} atualizado para concluído no banco`);
+          } else {
+            console.log(`❌ Nenhum registro atualizado para payment_id: ${pagamento.payment_id}`);
+          }
+        } else {
+          console.log(`⏳ Pagamento ${pagamento.reference} ainda pendente na LivePix`);
+        }
+      } catch (err) {
+        console.error(`Erro ao verificar pagamento ${pagamento.reference}:`, err.message);
       }
     }
   } catch (err) {
     console.error("Erro no job de verificação:", err);
   }
-}, 30000); // 2 minutos
+}, 30000); // 30 segundos para teste
 
 
 
