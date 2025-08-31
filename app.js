@@ -452,7 +452,7 @@ app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) =
 
 /* ---------------- JOB AUTOMÁTICO ---------------- */
 
-// Verifica pagamentos pendentes a cada 2 minutos
+// Verifica pagamentos pendentes a cada 30 segundos
 setInterval(async () => {
   try {
     const pendentes = await pool.query(
@@ -478,6 +478,10 @@ setInterval(async () => {
           
           if (result.rowCount > 0) {
             console.log(`✅ Pagamento ${pagamento.reference} atualizado para concluído`);
+            
+            // AGORA: Criar/atualizar a licença do usuário
+            await criarOuAtualizarLicenca(pagamento.discord_id, pagamento.amount);
+            
           } else {
             console.log(`❌ Nenhum registro atualizado para reference: ${pagamento.reference}`);
           }
