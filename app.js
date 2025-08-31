@@ -312,6 +312,7 @@ app.post('/usuarios/updateInfo', autenticarToken, async (req, res) => {
 
 
 
+// Criar pagamento
 app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
   const { discord_id, amount } = req.body;
 
@@ -320,21 +321,14 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
   }
 
   try {
-    // 1. Obter token
     const token = await getLivePixToken();
 
-    // 2. Criar pagamento no LivePix
     const pagamentoData = {
-      amount: Math.round(amount * 100), // em centavos
+      amount: Math.round(amount * 100),
       currency: "BRL",
-      redirectUrl: "https://bluecheat-front.vercel.app/sucesso", // URL de redirecionamento
-      metadata: {
-        discord_id: discord_id,
-        timestamp: new Date().toISOString()
-      }
+      redirectUrl: "https://bluecheat-front.vercel.app/sucesso",
+      metadata: { discord_id, timestamp: new Date().toISOString() }
     };
-
-    console.log("Criando pagamento com dados:", pagamentoData);
 
     const pagamentoResponse = await axios.post(
       "https://api.livepix.gg/v2/payments", 
@@ -348,18 +342,14 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
       }
     );
 
-    console.log("Resposta da LivePix:", pagamentoResponse.data);
-
     const { reference, redirectUrl, id: paymentId } = pagamentoResponse.data.data;
 
-    // 3. Salvar no banco
     const result = await pool.query(
       `INSERT INTO pagamentos (discord_id, amount, currency, reference, payment_id, redirect_url, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [discord_id, amount, "BRL", reference, paymentId, redirectUrl, "pendente"]
     );
 
-    // 4. Retornar para o front
     return res.json({ 
       sucesso: true, 
       pagamento: result.rows[0],
@@ -367,43 +357,21 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Erro completo ao criar pagamento:", {
-      message: err.message,
-      response: err.response?.data,
-      status: err.response?.status,
-      config: {
-        url: err.config?.url,
-        data: err.config?.data
-      }
-    });
-    
-    return res.status(500).json({ 
-      sucesso: false, 
-      mensagem: "Erro ao criar pagamento",
-      detalhes: err.response?.data || err.message
-    });
+    console.error("Erro ao criar pagamento:", err.response?.data || err.message);
+    return res.status(500).json({ sucesso: false, mensagem: "Erro ao criar pagamento" });
   }
 });
 
-
-// Rota webhook - LivePix chama automaticamente
+// Webhook (LivePix notifica)
 app.post("/pagamentos/webhook", async (req, res) => {
   try {
-    const { event, resource } = req.body; // desestrutura do body
-    const { id: paymentId, reference, type } = resource;
+    const { resource } = req.body;
+    const { id: paymentId, type } = resource;
 
-    console.log("Webhook recebido:", req.body);
+    if (type !== "payment") return res.status(200).json({ recebido: true });
 
-    if (type !== "payment") {
-      console.log("Evento ignorado:", type);
-      return res.status(200).json({ recebido: true });
-    }
-
-    // Atualiza o status do pagamento no banco
     await pool.query(
-      `UPDATE pagamentos
-       SET status = $1
-       WHERE payment_id = $2`,
+      `UPDATE pagamentos SET status = $1 WHERE payment_id = $2`,
       ["concluido", paymentId]
     );
 
@@ -414,17 +382,13 @@ app.post("/pagamentos/webhook", async (req, res) => {
   }
 });
 
-
-
-// Rota para verificar status do pagamento pelo discord_id
+// Status (consulta banco + API LivePix)
 app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
   const { discord_id } = req.params;
 
   try {
-    // Busca o pagamento mais recente do usuário
     const result = await pool.query(
-      `SELECT payment_id, status, amount, reference, redirect_url, created_at
-       FROM pagamentos
+      `SELECT * FROM pagamentos
        WHERE discord_id = $1
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -432,28 +396,88 @@ app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ sucesso: false, mensagem: "Nenhum pagamento encontrado para este usuário" });
+      return res.status(404).json({ sucesso: false, mensagem: "Nenhum pagamento encontrado" });
     }
 
     const pagamento = result.rows[0];
 
-    res.json({
-      sucesso: true,
-      pagamento: {
-        payment_id: pagamento.payment_id,
-        status: pagamento.status, // "pendente" ou "concluido"
-        amount: pagamento.amount,
-        reference: pagamento.reference,
-        redirect_url: pagamento.redirect_url,
-        created_at: pagamento.created_at
-      }
-    });
+    // Consulta na LivePix pelo reference
+    const consulta = await consultarPagamento(pagamento.reference);
 
+    if (consulta.data.length > 0) {
+      await pool.query(
+        `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
+        [pagamento.payment_id]
+      );
+      pagamento.status = "concluido";
+    }
+
+    res.json({ sucesso: true, pagamento });
   } catch (err) {
-    console.error("Erro ao verificar status do pagamento:", err);
+    console.error("Erro ao verificar status:", err);
     res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
   }
 });
+
+// Consulta manual forçada (direto na API)
+app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) => {
+  const { discord_id } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT * FROM pagamentos
+       WHERE discord_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [discord_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ sucesso: false, mensagem: "Nenhum pagamento encontrado" });
+    }
+
+    const pagamento = result.rows[0];
+    const consulta = await consultarPagamento(pagamento.reference);
+
+    if (consulta.data.length > 0) {
+      await pool.query(
+        `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
+        [pagamento.payment_id]
+      );
+      pagamento.status = "concluido";
+    }
+
+    res.json({ sucesso: true, pagamento });
+  } catch (err) {
+    console.error("Erro ao consultar pagamento:", err);
+    res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
+  }
+});
+
+/* ---------------- JOB AUTOMÁTICO ---------------- */
+
+// Verifica pagamentos pendentes a cada 2 minutos
+setInterval(async () => {
+  try {
+    const pendentes = await pool.query(
+      `SELECT * FROM pagamentos WHERE status = 'pendente'`
+    );
+
+    for (const pagamento of pendentes.rows) {
+      const consulta = await consultarPagamento(pagamento.reference);
+
+      if (consulta.data.length > 0) {
+        console.log(`Pagamento confirmado automaticamente: ${pagamento.reference}`);
+        await pool.query(
+          `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
+          [pagamento.payment_id]
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Erro no job de verificação:", err);
+  }
+}, 120000); // 2 minutos
 
 
 
