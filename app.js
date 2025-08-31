@@ -43,7 +43,6 @@ let livePixToken = null;
 let tokenExpiration = null;
 
 async function getLivePixToken() {
-  // Se temos um token válido e não expirado, retorna ele
   if (livePixToken && tokenExpiration && Date.now() < tokenExpiration) {
     return livePixToken;
   }
@@ -53,7 +52,7 @@ async function getLivePixToken() {
     params.append("grant_type", "client_credentials");
     params.append("client_id", LIVEPIX_CLIENT_ID);
     params.append("client_secret", LIVEPIX_CLIENT_SECRET);
-    params.append("scope", "payments:read");
+    params.append("scope", "payments:read payments:write account:read"); // Múltiplos escopos
 
     const response = await axios.post("https://oauth.livepix.gg/oauth2/token", params, {
       headers: { 
@@ -64,19 +63,15 @@ async function getLivePixToken() {
 
     console.log("Token obtido com sucesso. Scope:", response.data.scope);
     
-    // Cache do token (assumindo 1 hora de expiração - ajuste conforme a resposta)
     livePixToken = response.data.access_token;
-    tokenExpiration = Date.now() + (response.data.expires_in * 1000 || 3600000); // 1 hora padrão
+    tokenExpiration = Date.now() + (response.data.expires_in * 1000 || 3600000);
     
     return livePixToken;
   } catch (error) {
-    console.error("Erro ao obter token LivePix:", {
-      status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
-    });
+    console.error("Erro ao obter token LivePix:", error.response?.data || error.message);
     throw error;
   }
+}
 }
 
 
@@ -420,25 +415,6 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
   }
 });
 
-// Webhook (LivePix notifica)
-app.post("/pagamentos/webhook", async (req, res) => {
-  try {
-    const { resource } = req.body;
-    const { id: paymentId, type } = resource;
-
-    if (type !== "payment") return res.status(200).json({ recebido: true });
-
-    await pool.query(
-      `UPDATE pagamentos SET status = $1 WHERE payment_id = $2`,
-      ["concluido", paymentId]
-    );
-
-    res.status(200).json({ recebido: true });
-  } catch (err) {
-    console.error("Erro no webhook:", err);
-    res.status(500).json({ sucesso: false });
-  }
-});
 
 // Status (consulta banco + API LivePix)
 app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
