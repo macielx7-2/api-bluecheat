@@ -416,42 +416,9 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
 });
 
 
-// Nas rotas de status e consulta, use reference em vez de payment_id
-app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
-  const { discord_id } = req.params;
 
-  try {
-    const result = await pool.query(
-      `SELECT * FROM pagamentos
-       WHERE discord_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [discord_id]
-    );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ sucesso: false, mensagem: "Nenhum pagamento encontrado" });
-    }
-
-    const pagamento = result.rows[0];
-    const consulta = await consultarPagamento(pagamento.reference);
-
-    if (consulta.data && consulta.data.length > 0) {
-      await pool.query(
-        `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1`, // Use reference
-        [pagamento.reference]
-      );
-      pagamento.status = "concluido";
-    }
-
-    res.json({ sucesso: true, pagamento });
-  } catch (err) {
-    console.error("Erro ao verificar status:", err);
-    res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
-  }
-});
-
-// Consulta manual forçada (direto na API)
+// Consulta apenas no banco de dados (sem verificação na API)
 app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) => {
   const { discord_id } = req.params;
 
@@ -459,7 +426,7 @@ app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) =
     const result = await pool.query(
       `SELECT * FROM pagamentos
        WHERE discord_id = $1
-       ORDER BY created_at DESC
+       ORDER BY criado_em DESC
        LIMIT 1`,
       [discord_id]
     );
@@ -469,17 +436,14 @@ app.get('/pagamentos/consultar/:discord_id', autenticarToken, async (req, res) =
     }
 
     const pagamento = result.rows[0];
-    const consulta = await consultarPagamento(pagamento.reference);
-
-    if (consulta.data.length > 0) {
-      await pool.query(
-        `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
-        [pagamento.payment_id]
-      );
-      pagamento.status = "concluido";
-    }
-
-    res.json({ sucesso: true, pagamento });
+    
+    // Apenas retorna o status do banco, SEM consultar a API
+    res.json({ 
+      sucesso: true, 
+      pagamento,
+      mensagem: "Status consultado apenas no banco de dados local"
+    });
+    
   } catch (err) {
     console.error("Erro ao consultar pagamento:", err);
     res.status(500).json({ sucesso: false, mensagem: "Erro no servidor" });
