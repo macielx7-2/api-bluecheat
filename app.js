@@ -513,7 +513,7 @@ setInterval(async () => {
   } catch (err) {
     console.error("Erro no job de verificação:", err);
   }
-}, 120000); // 2 minutos
+}, 30000); // 2 minutos
 
 
 
