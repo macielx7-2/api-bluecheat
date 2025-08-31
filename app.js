@@ -470,14 +470,14 @@ setInterval(async () => {
         if (consulta.data && consulta.data.length > 0) {
           console.log(`✅ Pagamento confirmado na LivePix: ${pagamento.reference}`);
           
-          // Use reference para o UPDATE
+          // Use reference para o UPDATE e adicione o timestamp atual no campo pago_em
           const result = await pool.query(
-            `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1 RETURNING *`,
+            `UPDATE pagamentos SET status = 'concluido', pago_em = NOW() WHERE reference = $1 RETURNING *`,
             [pagamento.reference]
           );
           
           if (result.rowCount > 0) {
-            console.log(`✅ Pagamento ${pagamento.reference} atualizado para concluído`);
+            console.log(`✅ Pagamento ${pagamento.reference} atualizado para concluído com timestamp`);
             
             // AGORA: Criar/atualizar a licença do usuário
             await criarOuAtualizarLicenca(pagamento.discord_id, pagamento.amount);
