@@ -416,7 +416,7 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
 });
 
 
-// Status (consulta banco + API LivePix)
+// Nas rotas de status e consulta, use reference em vez de payment_id
 app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
   const { discord_id } = req.params;
 
@@ -434,14 +434,12 @@ app.get('/pagamentos/status/:discord_id', autenticarToken, async (req, res) => {
     }
 
     const pagamento = result.rows[0];
-
-    // Consulta na LivePix pelo reference
     const consulta = await consultarPagamento(pagamento.reference);
 
-    if (consulta.data.length > 0) {
+    if (consulta.data && consulta.data.length > 0) {
       await pool.query(
-        `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
-        [pagamento.payment_id]
+        `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1`, // Use reference
+        [pagamento.reference]
       );
       pagamento.status = "concluido";
     }
@@ -501,23 +499,23 @@ setInterval(async () => {
 
     for (const pagamento of pendentes.rows) {
       try {
-        console.log(`Verificando pagamento: ${pagamento.reference} (ID: ${pagamento.payment_id})`);
+        console.log(`Verificando pagamento: ${pagamento.reference}`);
         
         const consulta = await consultarPagamento(pagamento.reference);
 
         if (consulta.data && consulta.data.length > 0) {
           console.log(`✅ Pagamento confirmado na LivePix: ${pagamento.reference}`);
           
-          // CORREÇÃO AQUI: Use payment_id no WHERE e passe payment_id
+          // Use reference para o UPDATE
           const result = await pool.query(
-            `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1 RETURNING *`,
-            [pagamento.payment_id]
+            `UPDATE pagamentos SET status = 'concluido' WHERE reference = $1 RETURNING *`,
+            [pagamento.reference]
           );
           
           if (result.rowCount > 0) {
-            console.log(`✅ Pagamento ${pagamento.payment_id} atualizado para concluído no banco`);
+            console.log(`✅ Pagamento ${pagamento.reference} atualizado para concluído`);
           } else {
-            console.log(`❌ Nenhum registro atualizado para payment_id: ${pagamento.payment_id}`);
+            console.log(`❌ Nenhum registro atualizado para reference: ${pagamento.reference}`);
           }
         } else {
           console.log(`⏳ Pagamento ${pagamento.reference} ainda pendente na LivePix`);
@@ -529,7 +527,7 @@ setInterval(async () => {
   } catch (err) {
     console.error("Erro no job de verificação:", err);
   }
-}, 30000); // 30 segundos para teste
+}, 30000);
 
 
 
