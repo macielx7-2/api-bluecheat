@@ -69,9 +69,37 @@ async function getLivePixToken() {
 
 
 
+
+
+
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
+
+
+// Função para consultar pagamento na LivePix
+async function consultarPagamento(reference) {
+  try {
+    const token = await getLivePixToken();
+
+    const response = await axios.get("https://api.livepix.gg/v2/payments", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json"
+      },
+      params: { reference }
+    });
+
+    return response.data;
+  } catch (err) {
+    console.error("Erro ao consultar pagamento:", {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message
+    });
+    throw err;
+  }
+}
 
 // Rota para receber o code do Discord e trocar pelo token
 app.post('/auth/discord', async (req, res) => {
