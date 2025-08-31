@@ -39,14 +39,21 @@ const pool = new Pool({
   port: 39715,
 });
 
-// Função auxiliar para obter o access_token
+let livePixToken = null;
+let tokenExpiration = null;
+
 async function getLivePixToken() {
+  // Se temos um token válido e não expirado, retorna ele
+  if (livePixToken && tokenExpiration && Date.now() < tokenExpiration) {
+    return livePixToken;
+  }
+
   try {
     const params = new URLSearchParams();
     params.append("grant_type", "client_credentials");
     params.append("client_id", LIVEPIX_CLIENT_ID);
     params.append("client_secret", LIVEPIX_CLIENT_SECRET);
-    params.append("scope", "payments:write"); // Scope correto conforme documentação
+    params.append("scope", "payments:read");
 
     const response = await axios.post("https://oauth.livepix.gg/oauth2/token", params, {
       headers: { 
@@ -56,7 +63,12 @@ async function getLivePixToken() {
     });
 
     console.log("Token obtido com sucesso. Scope:", response.data.scope);
-    return response.data.access_token;
+    
+    // Cache do token (assumindo 1 hora de expiração - ajuste conforme a resposta)
+    livePixToken = response.data.access_token;
+    tokenExpiration = Date.now() + (response.data.expires_in * 1000 || 3600000); // 1 hora padrão
+    
+    return livePixToken;
   } catch (error) {
     console.error("Erro ao obter token LivePix:", {
       status: error.response?.status,
@@ -66,7 +78,6 @@ async function getLivePixToken() {
     throw error;
   }
 }
-
 
 
 
@@ -92,6 +103,25 @@ async function consultarPagamento(reference) {
 
     return response.data;
   } catch (err) {
+    // Se for erro 401, limpa o cache do token e tenta novamente
+    if (err.response?.status === 401) {
+      console.log("Token expirado, limpando cache e tentando novamente...");
+      livePixToken = null;
+      tokenExpiration = null;
+      
+      // Tenta uma vez mais com novo token
+      const token = await getLivePixToken();
+      const response = await axios.get("https://api.livepix.gg/v2/payments", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json"
+        },
+        params: { reference }
+      });
+      
+      return response.data;
+    }
+    
     console.error("Erro ao consultar pagamento:", {
       status: err.response?.status,
       data: err.response?.data,
@@ -494,12 +524,14 @@ setInterval(async () => {
     for (const pagamento of pendentes.rows) {
       const consulta = await consultarPagamento(pagamento.reference);
 
-      if (consulta.data.length > 0) {
-        console.log(`Pagamento confirmado automaticamente: ${pagamento.reference}`);
+      // No seu job automático e rotas de status:
+      if (consulta.data && consulta.data.length > 0) {
+        console.log(`Pagamento confirmado: ${pagamento.reference}`);
         await pool.query(
           `UPDATE pagamentos SET status = 'concluido' WHERE payment_id = $1`,
           [pagamento.payment_id]
         );
+        pagamento.status = "concluido";
       }
     }
   } catch (err) {
