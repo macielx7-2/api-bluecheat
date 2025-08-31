@@ -365,7 +365,6 @@ app.post('/usuarios/updateInfo', autenticarToken, async (req, res) => {
 
 
 
-// Criar pagamento
 app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
   const { discord_id, amount } = req.body;
 
@@ -395,12 +394,13 @@ app.post("/pagamentos/criar", autenticarToken, async (req, res) => {
       }
     );
 
-    const { reference, redirectUrl, id: paymentId } = pagamentoResponse.data.data;
+    const { reference, redirectUrl } = pagamentoResponse.data.data;
 
+    // CORREÇÃO: Use reference como payment_id, já que a API não retorna um id separado
     const result = await pool.query(
       `INSERT INTO pagamentos (discord_id, amount, currency, reference, payment_id, redirect_url, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [discord_id, amount, "BRL", reference, paymentId, redirectUrl, "pendente"]
+      [discord_id, amount, "BRL", reference, reference, redirectUrl, "pendente"] // Use reference como payment_id
     );
 
     return res.json({ 
